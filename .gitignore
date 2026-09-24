@@ -1,0 +1,22 @@
+# Python & Virtual Environment
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment Variables & Secrets
+.env
+*.env.local
+
+# Project Data & Vector Store Indexes
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
