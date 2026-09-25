@@ -1,12 +1,18 @@
 import os
 from typing import List, Dict, Any
 from langchain_core.documents import Document
+from langsmith import traceable
 from backend.config import settings
 from backend.rag.vector_store import VectorStoreManager
 from backend.rag.bm25_retriever import BM25RetrieverManager
 from backend.rag.reranker import reranker_instance
 from backend.kg.graph_store import GraphStoreManager
 from backend.utils.logger import logger
+
+def _traced(name: str, fn, *args, **kwargs):
+    """Runs fn(*args, **kwargs) as a named child step in the LangSmith trace."""
+    return traceable(name=name, run_type="chain")(fn)(*args, **kwargs)
+
 
 class StrategyEngine:
     def __init__(self):
@@ -39,6 +45,7 @@ class StrategyEngine:
         sorted_ids = sorted(doc_scores.keys(), key=lambda x: doc_scores[x], reverse=True)
         return [doc_map[did] for did in sorted_ids]
 
+    @traceable(name="retrieve_context", run_type="chain")
     def retrieve_context(self, session_id: str, query: str, strategy: str = None) -> Dict[str, Any]:
         """
         Executes retrieval according to selected RAG strategy:
@@ -51,11 +58,11 @@ class StrategyEngine:
         logger.info(f"Executing RAG Strategy: '{selected_strategy}' for query: '{query}'")
 
         # 1. Base Vector Retrieval
-        faiss_results = self.vector_mgr.search_similarity(session_id, query, k=6)
+        faiss_results = _traced("faiss_search", self.vector_mgr.search_similarity, session_id, query, k=6)
         vector_docs = [doc for doc, score in faiss_results]
 
         # 2. Knowledge Graph Retrieval
-        kg_relations = self.graph_mgr.search_relationships(session_id, query)
+        kg_relations = _traced("kg_search", self.graph_mgr.search_relationships, session_id, query)
 
         final_chunks: List[Document] = []
 
@@ -68,14 +75,14 @@ class StrategyEngine:
             all_docs = list(faiss_store.docstore._dict.values())
             
             bm25_mgr = BM25RetrieverManager(all_docs)
-            bm25_results = bm25_mgr.search(query, top_k=6)
+            bm25_results = _traced("bm25_search", bm25_mgr.search, query, top_k=6)
             bm25_docs = [doc for doc, score in bm25_results]
 
             # Fuse Vector + BM25 using RRF
-            fused_docs = self.reciprocal_rank_fusion(vector_docs, bm25_docs)
+            fused_docs = _traced("rrf_fusion", self.reciprocal_rank_fusion, vector_docs, bm25_docs)
 
             # Step 9 Addition: Cross-Encoder Re-ranking
-            reranked_pairs = reranker_instance.rerank(query, fused_docs, top_k=4)
+            reranked_pairs = _traced("cross_encoder_rerank", reranker_instance.rerank, query, fused_docs, top_k=4)
             final_chunks = [doc for doc, score in reranked_pairs]
 
         return {

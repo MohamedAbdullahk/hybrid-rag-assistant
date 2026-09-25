@@ -1,6 +1,7 @@
 import json
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
+from langsmith import traceable
 from backend.config import settings
 from backend.services.rag_service import rag_service_instance
 from backend.utils.logger import logger
@@ -44,6 +45,7 @@ class RAGEvaluator:
             openai_api_key=settings.OPENAI_API_KEY
         )
 
+    @traceable(name="llm_judge", run_type="chain")
     def _judge(self, question: str, contexts: List[str], answer: str, expected: str) -> Dict[str, Any]:
         """Asks the judge LLM to score one answer. Returns 0.0 scores on failure."""
         prompt = JUDGE_PROMPT.format(
@@ -75,6 +77,7 @@ class RAGEvaluator:
                 "reason": f"Judge failed: {str(e)}"
             }
 
+    @traceable(name="evaluate_strategy", run_type="chain")
     def evaluate_query(
         self,
         session_id: str,
@@ -113,6 +116,7 @@ class RAGEvaluator:
         logger.info(f"Evaluation Results ({strategy}): {summary}")
         return summary
 
+    @traceable(name="compare_all_strategies", run_type="chain", tags=["evaluation"])
     def compare_all_strategies(
         self,
         session_id: str,

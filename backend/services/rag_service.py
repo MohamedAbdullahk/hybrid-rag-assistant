@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+from langsmith import traceable
 from backend.config import settings
 from backend.services.intent_router import IntentRouter
 from backend.services.guardrails import guardrails
@@ -47,18 +48,21 @@ class RAGService:
         )
         self.strategy_engine = StrategyEngine()
 
+    @traceable(name="rewrite_query", run_type="chain")
     def rewrite_query(self, session_id: str, query: str) -> str:
         history_str = memory_manager.get_formatted_history(session_id)
         if not history_str or history_str == "No previous history.":
             return query
 
         prompt = ChatPromptTemplate.from_template(REWRITE_PROMPT)
-        formatted = prompt.format(chat_history=history_str, question=query)
-        response = self.llm.invoke(formatted)
+        # format_messages -> clean chat message (no "Human:" text prefix in the prompt)
+        messages = prompt.format_messages(chat_history=history_str, question=query)
+        response = self.llm.invoke(messages)
         rewritten = response.content.strip()
         logger.info(f"Original Query: '{query}' -> Rewritten: '{rewritten}'")
         return rewritten
 
+    @traceable(name="answer_question", run_type="chain", tags=["chat"])
     def answer_question(
         self,
         session_id: str,
@@ -120,14 +124,14 @@ class RAGService:
         # Stage 4: LLM Generation
         timer.start("llm")
         prompt = ChatPromptTemplate.from_template(QA_PROMPT)
-        formatted_prompt = prompt.format(
+        messages = prompt.format_messages(
             context_chunks=formatted_chunks if formatted_chunks else "No relevant chunks found.",
             kg_context=formatted_kg,
             chat_history=history_str,
             question=standalone_query
         )
         
-        response = self.llm.invoke(formatted_prompt)
+        response = self.llm.invoke(messages)
         raw_answer = response.content.strip()
         
         # Step 13 Guardrails: Sanitize Output

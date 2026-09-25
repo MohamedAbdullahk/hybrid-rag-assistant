@@ -2,8 +2,11 @@ import os
 import shutil
 import uuid
 import time
+import contextvars
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, HTTPException
+from langsmith import traceable
 from backend.config import settings
 from backend.rag.pdf_processor import PDFProcessor
 from backend.rag.vector_store import VectorStoreManager
@@ -13,9 +16,14 @@ from backend.kg.graph_store import GraphStoreManager
 
 router = APIRouter()
 
+# Knowledge Graph extraction settings
+KG_MAX_CHUNKS = 60      # safety cap so a very large PDF doesn't make hundreds of LLM calls
+KG_PARALLEL_CALLS = 8   # how many OpenAI calls run at the same time
+
 # In-memory store for processing status and timers per session
 processing_jobs: Dict[str, Dict[str, Any]] = {}
 
+@traceable(name="process_pdf", run_type="chain", tags=["upload"])
 def process_pdf_task(session_id: str, file_path: str):
     start_time = time.perf_counter()
     processing_jobs[session_id] = {"status": "processing", "elapsed_time": 0.0, "total_chunks": 0}
@@ -23,7 +31,7 @@ def process_pdf_task(session_id: str, file_path: str):
     try:
         logger.info(f"Starting PDF processing for session {session_id}...")
         processor = PDFProcessor()
-        chunks = processor.extract_and_chunk(file_path)
+        chunks = traceable(name="pdf_chunking", run_type="chain")(processor.extract_and_chunk)(file_path)
         
         # 1. Index chunks into FAISS Vector DB
         vector_mgr = VectorStoreManager()
@@ -33,10 +41,22 @@ def process_pdf_task(session_id: str, file_path: str):
         kg_extractor = KGExtractor()
         graph_mgr = GraphStoreManager()
         
-        all_triples = []
-        for chunk in chunks[:15]:  # Limit initial chunk batch for fast processing
-            triples = kg_extractor.extract_triples(chunk.page_content)
-            all_triples.extend(triples)
+        # Run KG extraction for many chunks IN PARALLEL (was: 15 chunks, one by one)
+        kg_chunks = chunks[:KG_MAX_CHUNKS]
+        kg_start = time.perf_counter()
+        # Each worker thread gets a copy of the current context, so every KG call
+        # appears as a child of "process_pdf" in LangSmith (threads don't inherit it by default)
+        contexts = [contextvars.copy_context() for _ in kg_chunks]
+        with ThreadPoolExecutor(max_workers=KG_PARALLEL_CALLS) as pool:
+            results = list(pool.map(
+                lambda pair: pair[0].run(kg_extractor.extract_triples, pair[1].page_content),
+                zip(contexts, kg_chunks)
+            ))
+        all_triples = [t for triples in results for t in triples]
+        logger.info(
+            f"KG extraction: {len(kg_chunks)} chunks, {len(all_triples)} triples "
+            f"in {time.perf_counter() - kg_start:.1f}s ({KG_PARALLEL_CALLS} parallel calls)"
+        )
             
         graph_mgr.build_and_save_graph(session_id, all_triples)
         
