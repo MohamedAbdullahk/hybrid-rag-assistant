@@ -59,7 +59,13 @@ class RAGService:
         logger.info(f"Original Query: '{query}' -> Rewritten: '{rewritten}'")
         return rewritten
 
-    def answer_question(self, session_id: str, query: str) -> Dict[str, Any]:
+    def answer_question(
+        self,
+        session_id: str,
+        query: str,
+        strategy: str = None,        # 🆕 எந்த strategy-ல ஓடணும்
+        save_memory: bool = True     # 🆕 Eval-ல False, memory-ல சேர்க்க வேண்டாம்
+    ) -> Dict[str, Any]:
         timer = StageTimer()
         timer.start("total")
 
@@ -92,7 +98,9 @@ class RAGService:
 
         # Stage 3: Context Retrieval
         timer.start("retrieval")
-        retrieval_data = self.strategy_engine.retrieve_context(session_id, standalone_query)
+        retrieval_data = self.strategy_engine.retrieve_context(
+            session_id, standalone_query, strategy=strategy
+        )
         timer.stop("retrieval")
 
         chunks = retrieval_data["chunks"]
@@ -128,14 +136,17 @@ class RAGService:
 
         timer.stop("total")
 
-        # Store turn in memory
-        memory_manager.add_turn(session_id, query, answer)
+        # Store turn in memory (skip during evaluation)
+        if save_memory:
+            memory_manager.add_turn(session_id, query, answer)
 
         return {
             "answer": answer,
             "sources": list(set(sources)),
             "timings": timer.get_summary(),
-            "is_small_talk": False
+            "is_small_talk": False,
+            "contexts": [doc.page_content for doc in chunks],
+            "strategy": retrieval_data["strategy"]  
         }
 
 rag_service_instance = RAGService()

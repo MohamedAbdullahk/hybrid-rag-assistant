@@ -18,9 +18,11 @@ class PDFProcessor:
 
         reader = PdfReader(file_path)
         documents: List[Document] = []
+        total_chars = 0       
 
         for page_num, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
+            total_chars += len(text.strip()) 
             if text.strip():
                 # Split text while maintaining page metadata
                 chunks = self.text_splitter.split_text(text)
@@ -35,4 +37,11 @@ class PDFProcessor:
                     )
                     documents.append(doc)
 
+        # NEW: Detect scanned / image-only PDFs
+        avg_chars = total_chars / max(len(reader.pages), 1)
+        if avg_chars < 100:
+            raise ValueError(
+                "This PDF looks like a scanned/image PDF (no readable text found). "
+                "Please upload a text-based PDF."
+            )
         return documents
