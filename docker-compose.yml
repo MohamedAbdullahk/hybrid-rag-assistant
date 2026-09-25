@@ -5,12 +5,11 @@ services:
       dockerfile: docker/Dockerfile.backend
     container_name: hybrid_rag_backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # only reachable from the VPS itself (Nginx)
     env_file:
       - .env
     volumes:
-      - ./data/faiss:/app/data/faiss
-      - ./data/kg:/app/data/kg
+      - ./data:/app/data        # persist uploaded PDFs, FAISS indexes & KG per session
       - ./logs:/app/logs
     restart: unless-stopped
 
@@ -20,7 +19,7 @@ services:
       dockerfile: docker/Dockerfile.frontend
     container_name: hybrid_rag_frontend
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"   # only reachable from the VPS itself (Nginx)
     environment:
       - BACKEND_HOST=http://hybrid_rag_backend:8000
     depends_on:
